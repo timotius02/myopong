@@ -27,5 +27,10 @@
   },
   "engines": {
     "node": ">=0.10.0"
+  },
+  "dependencies": {
+    "body-parser": "^1.9.2",
+    "express": "^4.10.2",
+    "socket.io": "^1.2.0"
   }
 }
