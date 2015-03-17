@@ -5,7 +5,6 @@ var myMyo = Myo.create();
 myMyo.on('gyroscope', function(data) {
     angle = Math.floor(data.x);
     y1 = Math.floor(data.y);
-    console.log(data);
 });
 
 myMyo.on('wave_in', function(edge){
