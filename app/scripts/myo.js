@@ -26,15 +26,31 @@
 	var getUniqueId = function(){
 		unique_counter++;
 		return new Date().getTime() + "" + unique_counter;
-	}
+	};
+
+	var quatInverse = function(q) {
+		var len = Math.sqrt(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w)
+		return {
+			w: q.w/len,
+			x: -q.x/len,
+			y: -q.y/len,
+			z: -q.z/len
+		};
+	};
+	var quatRotate = function(q, r) {
+		return {
+			w: q.w * r.w - q.x * r.x - q.y * r.y - q.z * r.z,
+			x: q.w * r.x + q.x * r.w + q.y * r.z - q.z * r.y,
+			y: q.w * r.y - q.x * r.z + q.y * r.w + q.z * r.x,
+			z: q.w * r.z + q.x * r.y - q.y * r.x + q.z * r.w
+		};
+	};
 
 
 	var eventTable = {
 		'pose' : function(myo, data){
-			if(myo.lastPose != 'rest' && data.pose == 'rest'){
-				myo.trigger(myo.lastPose, false);
-				myo.trigger('pose', myo.lastPose, false);
-			}
+			myo.trigger(myo.lastPose, false);
+			myo.trigger('pose', myo.lastPose, false);
 			myo.trigger(data.pose, true);
 			myo.trigger('pose', data.pose, true);
 			myo.lastPose = data.pose;
@@ -44,14 +60,9 @@
 		},
 		'orientation' : function(myo, data){
 			myo._lastQuant = data.orientation;
-			//console.log(data.orientation, myo.orientationOffset);
+			ori = quatRotate(myo.orientationOffset, data.orientation);
 			var imu_data = {
-				orientation : {
-					x : data.orientation.x - myo.orientationOffset.x,
-					y : data.orientation.y - myo.orientationOffset.y,
-					z : data.orientation.z - myo.orientationOffset.z,
-					w : data.orientation.w - myo.orientationOffset.w
-				},
+				orientation : ori,
 				accelerometer : {
 					x : data.accelerometer[0],
 					y : data.accelerometer[1],
@@ -62,7 +73,7 @@
 					y : data.gyroscope[1],
 					z : data.gyroscope[2]
 				}
-			}
+			};
 			if(!myo.lastIMU) myo.lastIMU = imu_data;
 			myo.trigger('orientation',   imu_data.orientation);
 			myo.trigger('accelerometer', imu_data.accelerometer);
@@ -70,24 +81,27 @@
 			myo.trigger('imu',           imu_data);
 			myo.lastIMU = imu_data;
 		},
-		'arm_recognized' : function(myo, data){
+		'arm_synced' : function(myo, data){
 			myo.arm = data.arm;
 			myo.direction = data.x_direction;
-			myo.trigger(data.type);
+			myo.trigger(data.type, data);
 		},
-		'arm_lost' : function(myo, data){
+		'arm_unsynced' : function(myo, data){
 			myo.arm = undefined;
 			myo.direction = undefined;
-			myo.trigger(data.type);
+			myo.trigger(data.type, data);
 		},
 		'connected' : function(myo, data){
 			myo.connect_version = data.version.join('.');
 			myo.isConnected = true;
-			myo.trigger(data.type)
+			myo.trigger(data.type, data);
 		},
 		'disconnected' : function(myo, data){
 			myo.isConnected = false;
-			myo.trigger(data.type);
+			myo.trigger(data.type, data);
+		},
+		'emg' : function(myo, data){
+			myo.trigger(data.type, data.emg);
 		}
 	};
 
@@ -108,14 +122,14 @@
 		events.map(function(event){
 			if(event.name == eventName) event.fn.apply(self, args);
 			if(event.name == '*'){
-				args.unshift(eventName)
+				args.unshift(eventName);
 				event.fn.apply(self, args);
 			}
 		});
 		return this;
 	};
 	var on = function(events, name, fn){
-		var id = getUniqueId()
+		var id = getUniqueId();
 		events.push({
 			id   : id,
 			name : name,
@@ -139,7 +153,7 @@
 	var myoInstance = {
 		isLocked : false,
 		isConnected : false,
-		orientationOffset : {x : 0,y : 0,z : 0,w : 0},
+		orientationOffset : {x : 0,y : 0,z : 0,w : 1},
 		lastIMU : undefined,
 		socket : undefined,
 		arm : undefined,
@@ -153,7 +167,7 @@
 			return this;
 		},
 		on : function(eventName, fn){
-			return on(this.events, eventName, fn)
+			return on(this.events, eventName, fn);
 		},
 		off : function(eventName){
 			this.events = off(this.events, eventName);
@@ -163,11 +177,17 @@
 			if(status){
 				this.timeout = setTimeout(fn.bind(this), timeout);
 			}else{
-				clearTimeout(this.timeout)
+				clearTimeout(this.timeout);
 			}
 		},
 		lock : function(){
 			if(this.isLocked) return true;
+
+			Myo.socket.send(JSON.stringify(["command", {
+				"command": "lock", 
+				"myo": this.id
+			}]));
+
 			this.isLocked = true;
 			this.trigger('lock');
 			return this;
@@ -176,9 +196,23 @@
 			var self = this;
 			clearTimeout(this.lockTimeout);
 			if(timeout){
+				Myo.socket.send(JSON.stringify(["command", {
+					"command": "unlock", 
+					"myo": this.id, 
+					"type": "hold"
+				}]));
+
 				this.lockTimeout = setTimeout(function(){
 					self.lock();
 				}, timeout);
+			}
+			else
+			{
+				Myo.socket.send(JSON.stringify(["command", {
+					"command": "unlock", 
+					"myo": this.id, 
+					"type": "timed"
+				}]));
 			}
 			if(!this.isLocked) return this;
 			this.isLocked = false;
@@ -186,11 +220,18 @@
 			return this;
 		},
 		zeroOrientation : function(){
-			this.orientationOffset = this._lastQuant;
+			this.orientationOffset = quatInverse(this._lastQuant);
 			this.trigger('zero_orientation');
 			return this;
 		},
-
+        setLockingPolicy: function (policy) {
+            policy = policy || "standard";
+            Myo.socket.send(JSON.stringify(['command',{
+                "command": "set_locking_policy",
+                "type": policy
+            }]));
+            return this;
+        },
 		vibrate : function(intensity){
 			intensity = intensity || 'medium';
 			Myo.socket.send(JSON.stringify(['command',{
@@ -207,12 +248,22 @@
 			}]));
 			return this;
 		},
-	}
+		streamEMG : function(enabled){
+			var type = 'enabled';
+			if(enabled === false) type = 'disabled';
+			Myo.socket.send(JSON.stringify(['command',{
+				"command": "set_stream_emg",
+				"myo": this.id,
+				"type" : type
+			}]));
+			return this;
+		},
+	};
 
 
 	Myo = {
 		options : {
-			api_version : 2,
+			api_version : 3,
 			socket_url  : "ws://127.0.0.1:10138/myo/"
 		},
 		events : [],
@@ -225,6 +276,8 @@
 		 * @return {myo}
 		 */
 		create : function(id, options){
+			if(!Myo.socket) Myo.initSocket();
+
 			if(!id) id = 0;
 			if(typeof id === "object") options = id;
 			options = options || {};
@@ -246,17 +299,18 @@
 			return Myo;
 		},
 		on : function(eventName, fn){
-			return on(Myo.events, eventName, fn)
+			return on(Myo.events, eventName, fn);
 		},
-		start : function(){
-			if(!Myo.socket){
-				Myo.socket = new Socket(Myo.options.socket_url + Myo.options.api_version);
-			}
+		initSocket : function(){
+			Myo.socket = new Socket(Myo.options.socket_url + Myo.options.api_version);
 			Myo.socket.onmessage = handleMessage;
+			Myo.socket.onerror = function(){
+				console.error('ERR: Myo.js had an error with the socket. Double check the API version.');
+			};
 		}
-
 	};
-
-	Myo.start();
 	if(typeof module !== 'undefined') module.exports = Myo;
 })();
+
+
+
