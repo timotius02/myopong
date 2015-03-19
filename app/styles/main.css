@@ -1,4 +1,13 @@
 canvas {
-  display:block;
-  margin: auto;
+    display: block;
+    margin: auto;
+    background-color: rgba(158, 167, 184, 0.2);
+}
+body {
+    height: 100%;
+    width: 100%;
+    /*background: #10161d url('../assets/images/dot_grid.png');*/
+    font-size: 12px;
+    color: #58bccc;
+    line-height: 20px;
 }
